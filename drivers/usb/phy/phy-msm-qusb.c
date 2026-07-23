@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2014-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/module.h>
@@ -103,8 +103,6 @@
 #define LINESTATE_DP			BIT(0)
 #define LINESTATE_DM			BIT(1)
 
-#define QUSB2PHY_VDD_VOL_MIN           925000 /* uV */
-#define QUSB2PHY_VDD_VOL_MAX           970000 /* uV */
 
 #define QUSB2PHY_1P8_VOL_MIN           1800000 /* uV */
 #define QUSB2PHY_1P8_VOL_MAX           1800000 /* uV */
@@ -155,9 +153,7 @@ struct qusb_phy {
 	struct regulator	*vdd;
 	struct regulator	*vdda33;
 	struct regulator	*vdda18;
-	u32			vdd_levels[3];
-	u32			vdda18_levels[3];
-	u32			vdda33_levels[3];
+	int			vdd_levels[3]; /* none, low, high */
 	int			init_seq_len;
 	int			*qusb_phy_init_seq;
 	u32			major_rev;
@@ -199,13 +195,6 @@ struct qusb_phy {
 	u8			tune4;
 	u8			tune5;
 };
-
-static void qusb_phy_init_vreg_levels(u32 *levels, u32 min, u32 max)
-{
-	levels[0] = 0;
-	levels[1] = min;
-	levels[2] = max;
-}
 
 static void qusb_phy_update_tcsr_level_shifter(struct qusb_phy *qphy,
 						u32 val)
@@ -324,9 +313,8 @@ static int qusb_phy_enable_power(struct qusb_phy *qphy, bool on)
 		goto disable_vdd;
 	}
 
-	ret = regulator_set_voltage(qphy->vdda18,
-				    qphy->vdda18_levels[1],
-				    qphy->vdda18_levels[2]);
+	ret = regulator_set_voltage(qphy->vdda18, QUSB2PHY_1P8_VOL_MIN,
+						QUSB2PHY_1P8_VOL_MAX);
 	if (ret) {
 		dev_err(qphy->phy.dev,
 				"Unable to set voltage for vdda18:%d\n", ret);
@@ -345,9 +333,8 @@ static int qusb_phy_enable_power(struct qusb_phy *qphy, bool on)
 		goto disable_vdda18;
 	}
 
-	ret = regulator_set_voltage(qphy->vdda33,
-				    qphy->vdda33_levels[1],
-				    qphy->vdda33_levels[2]);
+	ret = regulator_set_voltage(qphy->vdda33, QUSB2PHY_3P3_VOL_MIN,
+						QUSB2PHY_3P3_VOL_MAX);
 	if (ret) {
 		dev_err(qphy->phy.dev,
 				"Unable to set voltage for vdda33:%d\n", ret);
@@ -370,7 +357,7 @@ disable_vdda33:
 		dev_err(qphy->phy.dev, "Unable to disable vdda33:%d\n", ret);
 
 unset_vdd33:
-	ret = regulator_set_voltage(qphy->vdda33, 0, qphy->vdda33_levels[2]);
+	ret = regulator_set_voltage(qphy->vdda33, 0, QUSB2PHY_3P3_VOL_MAX);
 	if (ret)
 		dev_err(qphy->phy.dev,
 			"Unable to set (0) voltage for vdda33:%d\n", ret);
@@ -386,7 +373,7 @@ disable_vdda18:
 		dev_err(qphy->phy.dev, "Unable to disable vdda18:%d\n", ret);
 
 unset_vdda18:
-	ret = regulator_set_voltage(qphy->vdda18, 0, qphy->vdda18_levels[2]);
+	ret = regulator_set_voltage(qphy->vdda18, 0, QUSB2PHY_1P8_VOL_MAX);
 	if (ret)
 		dev_err(qphy->phy.dev,
 			"Unable to set (0) voltage for vdda18:%d\n", ret);
@@ -489,7 +476,6 @@ static int qusb_phy_init(struct usb_phy *phy)
 	u8 reg;
 	bool pll_lock_fail = false;
 
-	qusb_phy_enable_clocks(qphy, true);
 	if (qphy->eud_enable_reg && readl_relaxed(qphy->eud_enable_reg)) {
 		dev_err(qphy->phy.dev, "eud is enabled\n");
 		return 0;
@@ -647,11 +633,12 @@ static void qusb_phy_shutdown(struct usb_phy *phy)
 {
 	struct qusb_phy *qphy = container_of(phy, struct qusb_phy, phy);
 
-	qusb_phy_enable_clocks(qphy, true);
 	if (qphy->eud_enable_reg && readl_relaxed(qphy->eud_enable_reg)) {
 		dev_err(qphy->phy.dev, "eud is enabled\n");
 		return;
 	}
+
+	qusb_phy_enable_clocks(qphy, true);
 
 	/* Disable the PHY */
 	if (qphy->major_rev < 2)
@@ -687,15 +674,7 @@ static int qusb_phy_set_suspend(struct usb_phy *phy, int suspend)
 
 	if (suspend) {
 		/* Bus suspend case */
-		/*
-		 * The HUB class drivers calls usb_phy_notify_disconnect() upon a device
-		 * disconnect. Consider a scenario where a USB device is disconnected without
-		 * detaching the OTG cable. qphy->cable_connected is marked false due to above
-		 * mentioned call path. Now, while entering low power mode (host bus suspend),
-		 * we come here and turn off regulators thinking no cable is connected. Prevent
-		 * this by not turning off regulators while in host mode.
-		 */
-		if (qphy->cable_connected || (qphy->phy.flags & PHY_HOST_MODE)) {
+		if (qphy->cable_connected) {
 			/* Clear all interrupts */
 			writel_relaxed(0x00,
 				qphy->base + QUSB2PHY_PORT_INTR_CTRL);
@@ -903,19 +882,10 @@ static int qusb_phy_dpdm_regulator_enable(struct regulator_dev *rdev)
 	dev_dbg(qphy->phy.dev, "%s dpdm_enable:%d\n",
 				__func__, qphy->dpdm_enable);
 
-	/* Turn on the clocks to avoid unclocked access while reading EUD_EN reg*/
-	qusb_phy_enable_clocks(qphy, true);
 	if (qphy->eud_enable_reg && readl_relaxed(qphy->eud_enable_reg)) {
 		dev_err(qphy->phy.dev, "eud is enabled\n");
-		/*
-		 * Dont turn off the clocks since EUD is enabled, and return -EPERM
-		 * since we dont want chargerfw to go ahead with its APSD operation
-		 */
-		return -EPERM;
+		return 0;
 	}
-
-	if (!qphy->cable_connected)
-		qusb_phy_enable_clocks(qphy, false);
 
 	mutex_lock(&qphy->phy_lock);
 	if (!qphy->dpdm_enable) {
@@ -1651,32 +1621,13 @@ static int qusb_phy_probe(struct platform_device *pdev)
 	ret = of_property_read_u32(dev->of_node, "qcom,major-rev",
 						&qphy->major_rev);
 
-	qusb_phy_init_vreg_levels(qphy->vdd_levels, QUSB2PHY_VDD_VOL_MIN,
-				  QUSB2PHY_VDD_VOL_MAX);
-	qusb_phy_init_vreg_levels(qphy->vdda18_levels,
-				  QUSB2PHY_1P8_VOL_MIN,
-				  QUSB2PHY_1P8_VOL_MAX);
-	qusb_phy_init_vreg_levels(qphy->vdda33_levels,
-				  QUSB2PHY_3P3_VOL_MIN,
-				  QUSB2PHY_3P3_VOL_MAX);
-
 	ret = of_property_read_u32_array(dev->of_node, "qcom,vdd-voltage-level",
-					 qphy->vdd_levels,
+					 (u32 *) qphy->vdd_levels,
 					 ARRAY_SIZE(qphy->vdd_levels));
-	if (ret)
-		dev_dbg(dev, "qcom,vdd-voltage-level missing, using defaults\n");
-
-	ret = of_property_read_u32_array(dev->of_node, "qcom,vdda18-voltage-level",
-					 qphy->vdda18_levels,
-					 ARRAY_SIZE(qphy->vdda18_levels));
-	if (ret)
-		dev_dbg(dev, "qcom,vdda18-voltage-level missing, using defaults\n");
-
-	ret = of_property_read_u32_array(dev->of_node, "qcom,vdda33-voltage-level",
-					 qphy->vdda33_levels,
-					 ARRAY_SIZE(qphy->vdda33_levels));
-	if (ret)
-		dev_dbg(dev, "qcom,vdda33-voltage-level missing, using defaults\n");
+	if (ret) {
+		dev_err(dev, "error reading qcom,vdd-voltage-level property\n");
+		return ret;
+	}
 
 	qphy->vdd = devm_regulator_get(dev, "vdd");
 	if (IS_ERR(qphy->vdd)) {

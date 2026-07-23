@@ -4,12 +4,11 @@ targets = [
     #"gen3auto",
     "autogvm",
     "bengal",
-    "glymur",
     "hamoa",
-    "hamoa_la",
     "lahaina",
     "malabar",
     "monaco",
+    "pikachu",
     "seraph",
     "shikra",
     "sun",
@@ -27,7 +26,6 @@ le_targets = [
     #"sun-allyes",
     "alor-le",
     "autogvm",
-    "bengal-le",
     "vienna-le",
 ]
 
@@ -46,16 +44,9 @@ vm_types = [
 vm_target_bases = [
     "sun",
     "canoe",
-    "malabar",
-    "seraph",
-    "shikra",
 ]
 
-vm_targets = [
-    "{}-{}".format(t, vt)
-    for t in vm_target_bases
-    for vt in (["tuivm"] if "seraph" in t else vm_types)
-]
+vm_targets = ["{}-{}".format(t, vt) for t in vm_target_bases for vt in vm_types]
 
 vm_variants = [
     # keep sorted

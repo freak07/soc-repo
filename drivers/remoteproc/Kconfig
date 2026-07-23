@@ -79,7 +79,6 @@ config QCOM_Q6V5_PAS
 	select QCOM_Q6V5_COMMON
 	select QCOM_RPROC_COMMON
 	select QCOM_SCM
-	select QCOM_PDR_HELPERS
 	help
 	  Say y here to support the TrustZone based Peripheral Image Loader
 	  for the Qualcomm Hexagon v5 based remote processors. This is commonly
@@ -205,16 +204,6 @@ config QCOM_RPROC_BOTH_DUMPS
 	  case where subsystem minidump is enabled by policy and the feature
 	  is enabled for a client. The case where minidump is not enabled,
 	  and fulldump is collected by default remains unaffected.
-
-config QCOM_CRASH_SYMBOL_MATCH
-	bool "Enable symbol matching for crash stack addresses"
-	default n
-	help
-	  Say Y here to enable symbol matching for crash stack addresses
-	  using a symbol map to convert raw addresses into readable symbols.
-
-	  If disabled, only raw stack addresses are printed.
-	  Helps improve clarity and debugging of crash logs.
 
 endif # REMOTEPROC
 

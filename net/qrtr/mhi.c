@@ -47,26 +47,10 @@ static void qcom_mhi_qrtr_ul_callback(struct mhi_device *mhi_dev,
 	struct sk_buff *skb = mhi_res->buf_addr;
 	struct qrtr_mhi_dev *qdev = dev_get_drvdata(&mhi_dev->dev);
 
-	if (!qdev)
-		return;
-
 	if (skb->sk)
 		sock_put(skb->sk);
 	consume_skb(skb);
 
-	complete_all(&qdev->ringfull);
-}
-
-static void qcom_mhi_qrtr_status_cb(struct mhi_device *mhi_dev,
-				    enum mhi_callback reason)
-{
-	struct qrtr_mhi_dev *qdev = dev_get_drvdata(&mhi_dev->dev);
-
-	if (!qdev || reason != MHI_CB_FATAL_ERROR)
-		return;
-
-	WRITE_ONCE(qdev->abort_tx, true);
-	complete_all(&qdev->prepared);
 	complete_all(&qdev->ringfull);
 }
 
@@ -79,11 +63,9 @@ static int __qcom_mhi_qrtr_send(struct qrtr_endpoint *ep, struct sk_buff *skb)
 	if (skb->sk)
 		sock_hold(skb->sk);
 
-	rc = wait_for_completion_interruptible_timeout(&qdev->prepared, msecs_to_jiffies(5000));
-	if (rc <= 0) {
-		pr_err("%s : timeout:%d\n", __func__, rc);
+	rc = wait_for_completion_interruptible(&qdev->prepared);
+	if (rc)
 		goto free_skb;
-	}
 
 	rc = skb_linearize(skb);
 	if (rc)
@@ -109,15 +91,15 @@ static int qcom_mhi_qrtr_send(struct qrtr_endpoint *ep, struct sk_buff *skb)
 	struct qrtr_mhi_dev *qdev = container_of(ep, struct qrtr_mhi_dev, ep);
 	int rc;
 
-	if (READ_ONCE(qdev->abort_tx)) {
-		kfree_skb(skb);
-		return -EIO;
-	}
-
 	do {
-		reinit_completion(&qdev->ringfull);
+		if (READ_ONCE(qdev->abort_tx)) {
+			kfree_skb(skb);
+			return -EIO;
+		}
+
 		rc = __qcom_mhi_qrtr_send(ep, skb);
 		if (rc == -EAGAIN) {
+			reinit_completion(&qdev->ringfull);
 			if (READ_ONCE(qdev->abort_tx)) {
 				if (skb->sk)
 					sock_put(skb->sk);
@@ -193,7 +175,7 @@ static int qcom_mhi_qrtr_probe(struct mhi_device *mhi_dev,
 	}
 	complete_all(&qdev->prepared);
 
-	dev_dbg(qdev->dev, "Qualcomm MHI QRTR driver probed for channel: %s\n", id->chan);
+	dev_dbg(qdev->dev, "Qualcomm MHI QRTR driver probed\n");
 
 	return 0;
 }
@@ -213,14 +195,6 @@ static void qcom_mhi_qrtr_remove(struct mhi_device *mhi_dev)
 
 static const struct mhi_device_id qcom_mhi_qrtr_id_table[] = {
 	{ .chan = "IPCR" },
-	{ .chan = "IPCR_NSP0" },
-	{ .chan = "IPCR_NSP1" },
-	{ .chan = "IPCR_NSP2" },
-	{ .chan = "IPCR_NSP3" },
-	{ .chan = "IPCR_NSP4" },
-	{ .chan = "IPCR_NSP5" },
-	{ .chan = "IPCR_NSP6" },
-	{ .chan = "IPCR_NSP7" },
 	{}
 };
 MODULE_DEVICE_TABLE(mhi, qcom_mhi_qrtr_id_table);
@@ -287,7 +261,6 @@ static struct mhi_driver qcom_mhi_qrtr_driver = {
 	.remove = qcom_mhi_qrtr_remove,
 	.dl_xfer_cb = qcom_mhi_qrtr_dl_callback,
 	.ul_xfer_cb = qcom_mhi_qrtr_ul_callback,
-	.status_cb = qcom_mhi_qrtr_status_cb,
 	.id_table = qcom_mhi_qrtr_id_table,
 	.driver = {
 		.name = "qcom_mhi_qrtr",

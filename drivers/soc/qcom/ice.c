@@ -42,7 +42,6 @@
 #define QCOM_ICE_LUT_KEYS_CRYPTOCFG_R16		0x4040
 
 /* QCOM ICE HWKM registers */
-#define QTI_HWKM_ICE_RG_IPCAT_VERSION			0x0000
 #define QCOM_ICE_REG_HWKM_TZ_KM_CTL			0x1000
 #define QCOM_ICE_REG_HWKM_TZ_KM_STATUS			0x1004
 #define QCOM_ICE_REG_HWKM_BANK0_BANKN_IRQ_STATUS	0x2008
@@ -56,9 +55,6 @@
 #define QCOM_ICE_HWKM_BIST_DONE_V1_VAL		0x14007
 #define QCOM_ICE_HWKM_BIST_DONE_V2_VAL		0x287
 
-/* QCOM ICE HWKM version*/
-#define QCOM_ICE_HWKM_V2_0_0			0x02000000
-#define QCOM_ICE_HWKM_V2_1_0			0x02010000
 /* BIST ("built-in self-test") status flags */
 #define QCOM_ICE_BIST_STATUS_MASK		GENMASK(31, 28)
 
@@ -329,18 +325,7 @@ EXPORT_SYMBOL_GPL(qcom_ice_suspend);
  */
 static int translate_hwkm_slot(struct qcom_ice *ice, int slot)
 {
-	if (!ice->use_hwkm)
-		return slot;
-
-	int offset = 0;
-	u32 hwkm_version = 0;
-
-	if (ice->hwkm_init_complete) {
-		hwkm_version = qcom_ice_readl(ice, HWKM_OFFSET(QTI_HWKM_ICE_RG_IPCAT_VERSION));
-		if (hwkm_version >= QCOM_ICE_HWKM_V2_0_0 && hwkm_version < QCOM_ICE_HWKM_V2_1_0)
-			offset = 10;
-	}
-	return (ice->hwkm_version == 1) ? slot : ((slot * 2) + offset);
+	return (ice->hwkm_version == 1) ? slot : (slot * 2);
 }
 
 #if IS_ENABLED(CONFIG_SCSI_UFS_CRYPTO_QTI) || IS_ENABLED(CONFIG_MMC_CRYPTO_QTI)
@@ -389,25 +374,19 @@ static int qcom_ice_program_wrapped_key(struct qcom_ice *ice,
 	memcpy(shm.vaddr, key->raw, key->size);
 	qtee_shmbridge_flush_shm_buf(&shm);
 
-	if (!ice->use_hwkm) {
-		err = qcom_scm_config_set_ice_key(hwkm_slot, shm.paddr, key->size,
-			QCOM_SCM_ICE_CIPHER_AES_256_XTS, data_unit_size, 0);
-	} else {
-		/* Call trustzone to program the wrapped key using hwkm */
-		err = qcom_scm_config_set_ice_key(hwkm_slot, shm.paddr, key->size,
+	/* Call trustzone to program the wrapped key using hwkm */
+	err = qcom_scm_config_set_ice_key(hwkm_slot, shm.paddr, key->size,
 					  0, 0, 0);
-	}
 	if (err) {
 		pr_err("%s:SCM call Error: 0x%x slot %d\n", __func__, err,
 		       slot);
-		goto free_shm;
+		return err;
 	}
 
 	/* Enable CFGE after programming key */
 	qcom_ice_writel(ice, cfg.regval, QCOM_ICE_LUT_KEYS_CRYPTOCFG_R16 +
 					 QCOM_ICE_LUT_KEYS_CRYPTOCFG_OFFSET * slot);
 
-free_shm:
 	qtee_shmbridge_inv_shm_buf(&shm);
 	qtee_shmbridge_free_shm(&shm);
 	return err;
@@ -432,6 +411,8 @@ int qcom_ice_program_key_hwkm(struct qcom_ice *ice,
 	}
 
 	if (bkey->crypto_cfg.key_type == BLK_CRYPTO_KEY_TYPE_HW_WRAPPED) {
+		if (!ice->use_hwkm)
+			return -EINVAL;
 		err = qcom_ice_program_wrapped_key(ice, bkey, data_unit_size,
 						   slot);
 	}
@@ -543,15 +524,16 @@ int qcom_ice_derive_sw_secret(struct qcom_ice *ice, const u8 wkey[],
 
 	err = qcom_scm_derive_sw_secret(shm_key.paddr, wkey_size,
 					shm_secret.paddr, BLK_CRYPTO_SW_SECRET_SIZE);
+	if (err) {
+		pr_err("%s:SCM call error for raw secret: 0x%x\n", __func__, err);
+		goto free_secret;
+	}
 
 	qtee_shmbridge_inv_shm_buf(&shm_secret);
+	memcpy(sw_secret, shm_secret.vaddr, BLK_CRYPTO_SW_SECRET_SIZE);
 	qtee_shmbridge_inv_shm_buf(&shm_key);
 
-	if (err)
-		pr_err("%s:SCM call error for raw secret: 0x%x\n", __func__, err);
-	else
-		memcpy(sw_secret, shm_secret.vaddr, BLK_CRYPTO_SW_SECRET_SIZE);
-
+free_secret:
 	qtee_shmbridge_free_shm(&shm_secret);
 free_key:
 	qtee_shmbridge_free_shm(&shm_key);

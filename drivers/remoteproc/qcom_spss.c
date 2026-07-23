@@ -1,3 +1,8 @@
+/*
+ * NOTE: This file has been modified by Sony Corporation.
+ * Modifications are Copyright 2023 Sony Corporation,
+ * and licensed under the license of the file.
+ */
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
@@ -51,7 +56,6 @@
 #define MCP_SIZE_MUL_FACTOR (4)
 
 static bool ssr_already_occurred_since_boot;
-static int spss_pil_size_multiplier = MCP_SIZE_MUL_FACTOR;
 
 #define NUM_OF_DEBUG_REGISTERS_READ 0x3
 struct spss_data {
@@ -60,7 +64,6 @@ struct spss_data {
 	const char *ssr_name;
 	bool auto_boot;
 	const char *qmp_name;
-	int pil_size_multiplier;
 };
 
 struct qcom_rproc_glink_spss {
@@ -75,6 +78,8 @@ struct qcom_rproc_glink_spss {
 	struct notifier_block nb;
 	void *notifier_handle;
 };
+
+#define SUBSYS_CRASH_REASON_LEN 512
 
 struct qcom_spss {
 	struct device *dev;
@@ -109,6 +114,7 @@ struct qcom_spss {
 	void __iomem *err_status_spare;
 	void __iomem *rmb_gpm;
 	u32 bits_arr[2];
+	char crash_reason_buf[SUBSYS_CRASH_REASON_LEN];
 };
 
 static void read_sp2cl_debug_registers(struct qcom_spss *spss);
@@ -257,10 +263,26 @@ static void clear_sw_init_done_error(struct qcom_spss *spss, int err)
 }
 
 
+static ssize_t crash_reason_show(struct device *dev,
+	struct device_attribute *attr, char *buf)
+{
+	struct qcom_spss *spss = dev_get_drvdata(dev);
+	int r = 0;
+
+	r = snprintf(buf, PAGE_SIZE, "%s\n", spss->crash_reason_buf);
+	memset(spss->crash_reason_buf, 0, sizeof(spss->crash_reason_buf));
+
+	return r;
+}
+
+static DEVICE_ATTR_RO(crash_reason);
 
 static void clear_wdog(struct qcom_spss *spss)
 {
 	dev_err(spss->dev, "wdog bite received from %s!\n", spss->rproc->name);
+	snprintf(spss->crash_reason_buf, sizeof(spss->crash_reason_buf),
+			"wdog bite received from %s!", spss->rproc->name);
+
 	dev_err(spss->dev, "rproc recovery state: %s\n", spss->rproc->recovery_disabled ?
 		"disabled and lead to device crash" : "enabled and kick reovery process");
 	if (spss->rproc->recovery_disabled) {
@@ -270,6 +292,7 @@ static void clear_wdog(struct qcom_spss *spss)
 
 	__raw_writel(BIT(spss->bits_arr[ERR_READY]), spss->irq_clr);
 	rproc_report_crash(spss->rproc, RPROC_WATCHDOG);
+	sysfs_notify(&spss->dev->kobj, NULL, "crash_reason");
 }
 
 static irqreturn_t spss_generic_handler(int irq, void *dev_id)
@@ -361,13 +384,8 @@ int get_spss_image_size(phys_addr_t base_addr)
 	pil_size = readl_relaxed(spss_code_size_reg);
 	iounmap(spss_code_size_reg);
 
-	if (spss_pil_size_multiplier <= 0) {
-		pr_err("invalid pil_size_multiplier: %d\n", spss_pil_size_multiplier);
-		return -EINVAL;
-	}
-
 	/* Multiply the value read from code size register by factor to get the actual size. */
-	pil_size *= spss_pil_size_multiplier;
+	pil_size *= MCP_SIZE_MUL_FACTOR;
 
 	if (pil_size % SZ_4K) {
 		pr_err("pil_size [0x%08x] is not 4K aligned.\n", pil_size);
@@ -870,9 +888,6 @@ static int qcom_spss_probe(struct platform_device *pdev)
 	spss->dev = &pdev->dev;
 	spss->rproc = rproc;
 	spss->pas_id = desc->pas_id;
-
-	spss_pil_size_multiplier = desc->pil_size_multiplier;
-
 	init_completion(&spss->start_done);
 	platform_set_drvdata(pdev, spss);
 	rproc->auto_boot = desc->auto_boot;
@@ -940,6 +955,12 @@ static int qcom_spss_probe(struct platform_device *pdev)
 	if (ret)
 		goto remove_subdev;
 
+	ret = sysfs_create_file(&pdev->dev.kobj, &dev_attr_crash_reason.attr);
+	if (ret) {
+		dev_err(&pdev->dev, "qcom_spss: failed to create sysfs crash_reason\n");
+		kobject_put(&pdev->dev.kobj);
+	}
+
 	return 0;
 
 remove_subdev:
@@ -970,16 +991,6 @@ static const struct spss_data spss_resource_init = {
 		.ssr_name = "spss",
 		.auto_boot = false,
 		.qmp_name = "spss",
-		.pil_size_multiplier = 4,
-};
-
-static const struct spss_data spss_resource_init_lahaina = {
-		.firmware_name = "spss1t.mdt",
-		.pas_id = 14,
-		.ssr_name = "spss",
-		.auto_boot = false,
-		.qmp_name = "spss",
-		.pil_size_multiplier = 1,
 };
 
 static const struct of_device_id spss_of_match[] = {
@@ -988,7 +999,6 @@ static const struct of_device_id spss_of_match[] = {
 	{ .compatible = "qcom,pineapple-spss-pas", .data = &spss_resource_init},
 	{ .compatible = "qcom,sun-spss-pas", .data = &spss_resource_init},
 	{ .compatible = "qcom,canoe-spss-pas", .data = &spss_resource_init},
-	{ .compatible = "qcom,lahaina-spss-pas", .data = &spss_resource_init_lahaina},
 	{ },
 };
 MODULE_DEVICE_TABLE(of, spss_of_match);

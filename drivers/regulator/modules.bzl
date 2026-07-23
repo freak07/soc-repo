@@ -197,25 +197,13 @@ def register_modules(registry):
     )
 
     registry.register(
-        name = "drivers/regulator/renesas-slg5bleft",
-        out = "renesas-slg5bleft.ko",
-        config = "CONFIG_REGULATOR_RENESAS_SLG5BLEFT",
+        name = "drivers/regulator/wl28681c-regulator",
+        out = "wl28681c-regulator.ko",
+        config = "CONFIG_REGULATOR_WL28681C",
         srcs = [
             # do not sort
-            "drivers/regulator/renesas-slg5bleft.c",
-        ],
-        deps = [
-            # do not sort
-        ],
-    )
-
-    registry.register(
-        name = "drivers/regulator/renesas-slg5bright",
-        out = "renesas-slg5bright.ko",
-        config = "CONFIG_REGULATOR_RENESAS_SLG5BRIGHT",
-        srcs = [
-            # do not sort
-            "drivers/regulator/renesas-slg5bright.c",
+            "drivers/regulator/wl28681c-regulator.c",
+            "drivers/regulator/wl28681c-regulator.h",
         ],
         deps = [
             # do not sort

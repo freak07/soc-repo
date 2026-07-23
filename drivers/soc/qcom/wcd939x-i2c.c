@@ -3,6 +3,12 @@
  * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
+/*
+ * Copyright 2026 Sony Corporation
+ * NOTE: This file has been modified by Sony Corporation
+ * Modifications are licensed under the License.
+ */
+
 #include <linux/usb/typec.h>
 #include <linux/usb/typec_altmode.h>
 #include <linux/usb/typec_mux.h>
@@ -26,7 +32,7 @@
 #define MAX_SURGE_TIMER_PERIOD_SEC 20
 #define PM_RUNTIME_RESUME_CNT 8
 #define PM_RUNTIME_RESUME_WAIT_MIN_US  5000
-#define MG_BIAS_CURRENT 0xCF
+#define MG_BIAS_CURRENT 0xCE
 
 enum {
 	WCD_USBSS_AUDIO_MANUAL,

@@ -50,16 +50,12 @@ static int hab_import_ack_wait(struct uhab_context *ctx,
 		hab_import_ack_find(ctx, import_ack, vchan, scan_imp_whse),
 		HAB_HS_TIMEOUT);
 
-	if (!ret) {
+	if (!ret || (ret == -ERESTARTSYS))
 		ret = -EAGAIN;
-	} else if (ret == -ERESTARTSYS) {
-		dump_hab_pending_signals();
-		ret = -EAGAIN;
-	} else if (vchan->otherend_closed) {
+	else if (vchan->otherend_closed)
 		ret = -ENODEV;
-	} else if (ret > 0) {
+	else if (ret > 0)
 		ret = 0;
-	}
 
 	return ret;
 }
@@ -116,17 +112,12 @@ static int hab_export_ack_wait(struct uhab_context *ctx,
 	ret = wait_event_interruptible_timeout(ctx->exp_wq,
 		hab_export_ack_find(ctx, expect_ack, vchan),
 		HAB_HS_TIMEOUT);
-	if (!ret) {
+	if (!ret || (ret == -ERESTARTSYS))
 		ret = -EAGAIN;
-	} else if (ret == -ERESTARTSYS) {
-		dump_hab_pending_signals();
-		ret = -EAGAIN;
-	} else if (vchan->otherend_closed) {
+	else if (vchan->otherend_closed)
 		ret = -ENODEV;
-	} else if (ret > 0) {
+	else if (ret > 0)
 		ret = 0;
-	}
-
 	return ret;
 }
 
@@ -541,8 +532,7 @@ int hab_mem_import(struct uhab_context *ctx,
 		expected_ack.vcid_remote = vchan->otherend_id;
 		ret = hab_import_ack_wait(ctx, &expected_ack, vchan, &scan_imp_whse);
 		if (ret != 0) {
-			pr_err("failed to receive remote import ack %d on vc %x vc-rmt %x expid %u\n",
-				ret, vchan->id, vchan->otherend_id, expected_ack.export_id);
+			pr_err("failed to receive remote import ack %d on vc %x\n", ret, vchan->id);
 			goto err_imp;
 		}
 

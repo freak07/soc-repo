@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/kthread.h>
@@ -8,6 +8,7 @@
 #include "si_core.h"
 
 static struct task_struct *adci_task;
+static struct si_object_invoke_ctx oic;
 
 static void wait_to_die(void)
 {
@@ -26,7 +27,6 @@ static int adci_fn(void *unused)
 {
 	int ret, result = 0;
 	struct si_arg args[1] = { 0 };
-	struct si_object_invoke_ctx oic;
 
 	/* IClientEnv_OP_adciAccept is 8. */
 	ret = si_object_do_invoke(&oic, ROOT_SI_OBJECT, 8, args, &result);
@@ -58,7 +58,6 @@ int adci_shutdown(void)
 {
 	int ret, result = 0;
 	struct si_arg args[1] = { 0 };
-	struct si_object_invoke_ctx oic;
 
 	/* IClientEnv_OP_adciShutdown is 9. */
 	ret = si_object_do_invoke(&oic, ROOT_SI_OBJECT, 9, args, &result);
