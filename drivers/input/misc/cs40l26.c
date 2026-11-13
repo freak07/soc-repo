@@ -2073,7 +2073,29 @@ static void cs40l26_vibe_start_worker(struct work_struct *work)
 		cs40l26_log_err(cs40l26, error, CS40L26_ERR_TYPE_IOCTL, __func__);
 		goto err_mutex;
 	}
+#if 0
+	if ((effect_id == 2 || effect_id == 10) && ueffect->wvfrm_bank == CS40L26_BUZ_BANK_ID) {
+        int slot = cs40l26_buzzgen_find_slot(cs40l26, effect->id);
+        if (slot != -1) {
+            u32 buzz_reg;
 
+            // 1. Update the hardware Level (Magnitude) instantly
+            if (!cl_dsp_get_reg(cs40l26->dsp, cs40l26_buzzgen_configs[slot].level_name,
+                    CL_DSP_XM_UNPACKED_TYPE, CS40L26_BUZZGEN_ALGO_ID, &buzz_reg)) {
+                regmap_write(cs40l26->regmap, buzz_reg, cs40l26->override_magnitude);
+            }
+
+            // 2. Update the hardware Frequency (Period) instantly
+            if (!cl_dsp_get_reg(cs40l26->dsp, cs40l26_buzzgen_configs[slot].freq_name,
+                    CL_DSP_XM_UNPACKED_TYPE, CS40L26_BUZZGEN_ALGO_ID, &buzz_reg)) {
+                regmap_write(cs40l26->regmap, buzz_reg, 1000 / cs40l26->override_period);
+            }
+
+            // 3. Update the duration in the struct so the rest of the function catches it
+            effect->replay.length = cs40l26->override_length;
+        }
+    }
+#endif
 	duration = effect->replay.length;
 
 	error = cl_dsp_get_reg(cs40l26->dsp, "TIMEOUT_MS",
@@ -2263,6 +2285,13 @@ static int cs40l26_playback_effect(struct input_dev *dev, int effect_id, int val
 {
 	struct cs40l26_private *cs40l26 = input_get_drvdata(dev);
 	struct cs40l26_work *work_data;
+
+	if ((effect_id == 2 || effect_id == 10 || effect_id == 14) &&
+        cs40l26->override_effect_id >= 0) {
+        dev_info(cs40l26->dev, "HACK: Swapping effect ID %d for %d\n",
+                 effect_id, cs40l26->override_effect_id);
+        effect_id = cs40l26->override_effect_id;
+    }
 
 	if (cs40l26->cal_ongoing) {
 		dev_err(cs40l26->dev, "Must wait for calibration to finish before playback\n");
@@ -3122,13 +3151,18 @@ static int cs40l26_custom_upload(struct cs40l26_private *cs40l26, struct cs40l26
 	int error;
 	u16 bank;
 
+	dev_info(cs40l26->dev, "HACK ROUTING CHECK: Effect %d | data_len: %zu | Threshold: %d\n",
+             effect->id, data_len, CS40L26_CUSTOM_DATA_SIZE);
+
 	if (data_len > CS40L26_CUSTOM_DATA_SIZE) {
+		dev_info(cs40l26->dev, "HACK ROUTING SUCCESS: Payload is large enough, sending to OWT Engine!\n");
 		bank = (u16) CS40L26_OWT_BANK_ID;
 
 		error = cs40l26_custom_owt(cs40l26, work_data, data_len, &trigger_index);
 		if (error)
 			return error;
 	} else {
+		dev_info(cs40l26->dev, "HACK ROUTING FAIL: Payload is tiny, sending to RAM Pointer Engine.\n");
 		bank = (u16) work_data->raw_custom_data[0];
 
 		if (bank == CS40L26_RAM_BANK_ID) {
@@ -3256,7 +3290,18 @@ static int cs40l26_upload_effect(struct input_dev *dev,
 	int error;
 
 	dev_dbg(cs40l26->dev, "%s: effect ID = %d\n", __func__, effect->id);
+#if 0
+	if (effect->id == 2) {
+        dev_info(cs40l26->dev, "HACK: Effect 2 -> SINE (Mag: %d, Per: %d, Len: %d)\n",
+                 cs40l26->override_magnitude, cs40l26->override_period, cs40l26->override_length);
 
+        effect->u.periodic.waveform = FF_SINE;
+
+        effect->u.periodic.magnitude = cs40l26->override_magnitude;
+        effect->u.periodic.period = cs40l26->override_period;
+        effect->replay.length = cs40l26->override_length;
+    }
+#endif
 	memset((void *) &work_data, 0, sizeof(struct cs40l26_work));
 
 	if (effect->u.periodic.waveform == FF_CUSTOM) {
@@ -3273,6 +3318,141 @@ static int cs40l26_upload_effect(struct input_dev *dev,
 			cs40l26_log_err(cs40l26, error, CS40L26_ERR_TYPE_IOCTL, __func__);
 			goto out_free;
 		}
+#if 0
+		dev_info(cs40l26->dev, "DUMPING EFFECT ID %d (Length: %d)\n", effect->id, len);
+        print_hex_dump(KERN_INFO, "OWT PAYLOAD: ", DUMP_PREFIX_OFFSET, 16, 1,
+                       work_data.raw_custom_data, len * sizeof(s16), false);
+#endif
+#if 0
+	if (len > 2 && work_data.raw_custom_data[1] != CS40L26_WT_TYPE12_IDENTIFIER) {
+            u8 *payload = (u8 *)work_data.raw_custom_data;
+            u8 nsections = payload[2]; // Byte 2 contains the number of sections
+            int i;
+
+            dev_info(cs40l26->dev, "HACK: Amplifying %d sections in OWT payload (Effect %d)\n",
+                     nsections, effect->id);
+
+            // Loop through every section and overwrite its amplitude
+            for (i = 0; i < nsections; i++) {
+                int amp_idx = 5 + (i * 8); // The exact byte offset of the amplitude
+
+                // Safety check to prevent buffer overflows
+                if (amp_idx < len * sizeof(s16)) {
+                    // Override Android's weak amplitude with our sysfs magnitude!
+                    // 0x64 is 100%. 0xFF is maximum overdrive.
+                    payload[amp_idx] = cs40l26->override_magnitude;
+                }
+            }
+        }
+#endif
+#if 0
+     if (effect->id == 2 || effect->id == 10) {
+            /* The exact 20 bytes dumped from the strong fingerprint failure */
+            static const u8 strong_owt_payload[] = {
+                0x00, 0x00, 0x02, 0x00, 0x00, 0x64, 0x02, 0x00,
+                0x00, 0x00, 0x00, 0x64, 0x00, 0x64, 0x0d, 0x00,
+                0x00, 0x00, 0x00, 0x00
+            };
+            u8 *payload;
+
+            dev_info(cs40l26->dev, "HACK: Overwriting Effect 2 with captured OWT payload\n");
+
+            // Free the weak Android pointer
+            kfree(work_data.raw_custom_data);
+
+            // Update the length (framework measures in 16-bit words, so 20 bytes = 10 words)
+            work_data.raw_custom_data_len = sizeof(strong_owt_payload) / sizeof(s16);
+
+            // Allocate and copy our strong payload
+            work_data.raw_custom_data = kmemdup(strong_owt_payload,
+                                                sizeof(strong_owt_payload),
+                                                GFP_KERNEL);
+
+            // Inject the sysfs override_magnitude into the amplitude bytes
+            // In your dump, 0x64 (100) is used for the amplitudes.
+            payload = (u8 *)work_data.raw_custom_data;
+            payload[5]  = cs40l26->override_magnitude; // Amplitude 1
+            payload[11] = cs40l26->override_magnitude; // Amplitude 2
+            payload[13] = cs40l26->override_magnitude; // Amplitude 3
+        }
+#endif
+#if 0
+	if (effect->id == 2 || effect->id == 10) {
+            /* The exact 20 bytes from your strong fingerprint dump */
+            static const u8 fp_payload[] = {
+				0x00, 0x00, 0x02, 0x00, /* 2 Sections, 0 Global Repeats */
+				0x00, 0x82, 0x02, 0x00, 0x00, 0x00, 0x00, 0x64, /* Section 1: Amp 130, Index 2, Delay */
+				0x00, 0x82, 0x0d, 0x00, 0x00, 0x00, 0x00, 0x00  /* Section 2: Amp 130, Index 13 */
+			};
+            u8 *payload;
+            int old_len = effect->u.periodic.custom_len;
+
+            dev_info(cs40l26->dev, "HACK: Intercepted Effect 2. Old length: %d words\n", old_len);
+
+            // Free Android's weak keyboard pointer
+            kfree(work_data.raw_custom_data);
+
+            // Allocate and copy our fingerprint payload
+            work_data.raw_custom_data = kmemdup(fp_payload, sizeof(fp_payload), GFP_KERNEL);
+
+            // The Linux input framework measures custom data in 16-bit chunks
+            effect->u.periodic.custom_len = sizeof(fp_payload) / sizeof(s16);
+            work_data.raw_custom_data_len = effect->u.periodic.custom_len;
+
+            payload = (u8 *)work_data.raw_custom_data;
+            payload[5]  = cs40l26->override_magnitude; // Amplitude 1
+            payload[13]  = cs40l26->override_magnitude; // Amplitude 1
+
+            dev_info(cs40l26->dev, "HACK: New length: %d words. Injected Magnitude: %d\n",
+                     effect->u.periodic.custom_len, cs40l26->override_magnitude);
+
+            // Dump the final payload to verify the bytes were injected correctly
+            print_hex_dump(KERN_INFO, "HACK OWT PAYLOAD: ", DUMP_PREFIX_OFFSET, 16, 1,
+                           work_data.raw_custom_data, sizeof(fp_payload), false);
+        }
+#endif
+	if (effect->id == 2 || effect->id == 10) {
+            /* 2 Sections, ZERO Delay */
+            static const u8 fp_payload[] = {
+                0x00, 0x00, 0x02, 0x00, /* Header: 2 Sections, 0 Global Repeats */
+
+                /* Section 1: Sharp attack (Index 2) - Delay 0 (0x00) */
+                0x00, 0xFF, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00,
+
+                /* Section 2: Heavy thump (Index 13) - Delay 0 (0x00) */
+                0x00, 0xFF, 0x0d, 0x00, 0x00, 0x00, 0x00, 0x00
+            };
+            u8 *payload;
+            int old_len = effect->u.periodic.custom_len;
+
+            dev_info(cs40l26->dev, "HACK: Intercepted Effect %d. Old length: %d words\n",
+                     effect->id, old_len);
+
+            // Free Android's weak pointer
+            kfree(work_data.raw_custom_data);
+
+            // Allocate and copy our Monolithic payload
+            work_data.raw_custom_data = kmemdup(fp_payload, sizeof(fp_payload), GFP_KERNEL);
+
+            // 20 bytes = 10 16-bit words
+            effect->u.periodic.custom_len = sizeof(fp_payload) / sizeof(s16);
+            work_data.raw_custom_data_len = effect->u.periodic.custom_len;
+
+            // Inject the sysfs override_magnitude into both amplitude bytes
+            payload = (u8 *)work_data.raw_custom_data;
+            payload[5]  = cs40l26->override_magnitude; // Amplitude 1 (Index 2)
+            payload[13] = cs40l26->override_magnitude; // Amplitude 2 (Index 13)
+            payload[11] = (u8)cs40l26->override_repeat;
+
+            dev_info(cs40l26->dev, "HACK: New length: %d words. Injected Magnitude: %d\n",
+                     effect->u.periodic.custom_len, cs40l26->override_magnitude);
+
+            print_hex_dump(KERN_INFO, "HACK MONOLITHIC PAYLOAD: ", DUMP_PREFIX_OFFSET, 16, 1,
+                           work_data.raw_custom_data, sizeof(fp_payload), false);
+        }
+		dev_info(cs40l26->dev, "DUMPING EFFECT ID %d (Length: %d)\n", effect->id, len);
+        print_hex_dump(KERN_INFO, "OWT PAYLOAD: ", DUMP_PREFIX_OFFSET, 16, 1,
+                       work_data.raw_custom_data, len * sizeof(s16), false);
 	}
 
 	work_data.cs40l26 = cs40l26;
@@ -5886,10 +6066,140 @@ int cs40l26_log_err(struct cs40l26_private *cs40l26, int code, u32 type, const c
 }
 EXPORT_SYMBOL_GPL(cs40l26_log_err);
 
+static ssize_t override_effect_id_show(struct device *dev,
+                                       struct device_attribute *attr, char *buf)
+{
+    struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
+    return snprintf(buf, PAGE_SIZE, "%d\n", cs40l26->override_effect_id);
+}
+
+static ssize_t override_effect_id_store(struct device *dev,
+                                        struct device_attribute *attr,
+                                        const char *buf, size_t count)
+{
+    struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
+    int val;
+
+    if (kstrtoint(buf, 10, &val))
+        return -EINVAL;
+
+    cs40l26->override_effect_id = val;
+    return count;
+}
+static DEVICE_ATTR_RW(override_effect_id);
+
+static ssize_t override_magnitude_show(struct device *dev,
+                                       struct device_attribute *attr, char *buf)
+{
+    struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
+    return snprintf(buf, PAGE_SIZE, "%d\n", cs40l26->override_magnitude);
+}
+
+static ssize_t override_magnitude_store(struct device *dev,
+                                        struct device_attribute *attr,
+                                        const char *buf, size_t count)
+{
+    struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
+    int val;
+
+    if (kstrtoint(buf, 10, &val))
+        return -EINVAL;
+
+    /* Clamp magnitude to valid hardware bounds (0 to 255) */
+    if (val < 0) val = 0;
+    if (val > 255) val = 255;
+
+    cs40l26->override_magnitude = val;
+    return count;
+}
+static DEVICE_ATTR_RW(override_magnitude);
+
+static ssize_t override_period_show(struct device *dev,
+                                    struct device_attribute *attr, char *buf)
+{
+    struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
+    return snprintf(buf, PAGE_SIZE, "%d\n", cs40l26->override_period);
+}
+
+static ssize_t override_period_store(struct device *dev,
+                                     struct device_attribute *attr,
+                                     const char *buf, size_t count)
+{
+    struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
+    int val;
+
+    if (kstrtoint(buf, 10, &val))
+        return -EINVAL;
+
+    /* Period represents 1000/Frequency. Prevent divide-by-zero */
+    if (val < 1) val = 1;
+
+    cs40l26->override_period = val;
+    return count;
+}
+static DEVICE_ATTR_RW(override_period);
+
+/* --- CUSTOM LENGTH TUNABLE --- */
+static ssize_t override_length_show(struct device *dev,
+                                    struct device_attribute *attr, char *buf)
+{
+    struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
+    return snprintf(buf, PAGE_SIZE, "%d\n", cs40l26->override_length);
+}
+
+static ssize_t override_length_store(struct device *dev,
+                                     struct device_attribute *attr,
+                                     const char *buf, size_t count)
+{
+    struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
+    int val;
+
+    if (kstrtoint(buf, 10, &val))
+        return -EINVAL;
+
+    if (val < 0) val = 0;
+
+    cs40l26->override_length = val;
+    return count;
+}
+static DEVICE_ATTR_RW(override_length);
+
+static ssize_t override_repeat_show(struct device *dev,
+        struct device_attribute *attr, char *buf)
+{
+    struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
+    return scnprintf(buf, PAGE_SIZE, "%d\n", cs40l26->override_repeat);
+}
+
+static ssize_t override_repeat_store(struct device *dev,
+        struct device_attribute *attr, const char *buf, size_t count)
+{
+    struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
+    int ret, val;
+
+    ret = kstrtoint(buf, 10, &val);
+    if (ret)
+        return ret;
+
+    // Optional: cap the repeat limit so it doesn't get stuck vibrating forever
+    if (val < 0) val = 0;
+    if (val > 50) val = 50;
+
+    cs40l26->override_repeat = val;
+    return count;
+}
+static DEVICE_ATTR_RW(override_repeat);
+
 int cs40l26_probe(struct cs40l26_private *cs40l26)
 {
 	static const char * const regulator_names[] = { "VP", "VA" };
 	int error;
+
+	cs40l26->override_effect_id = -1;
+	cs40l26->override_magnitude = 230;
+	cs40l26->override_period = 2;      /* 6ms = ~166Hz resonance */
+    cs40l26->override_length = 2;
+    cs40l26->override_repeat = 0;
 
 	mutex_init(&cs40l26->lock);
 
@@ -6065,6 +6375,11 @@ int cs40l26_probe(struct cs40l26_private *cs40l26)
 		dev_dbg(cs40l26->dev, "Vibrate from probe done.\n");
 	}
 #endif
+	device_create_file(cs40l26->dev, &dev_attr_override_effect_id);
+	device_create_file(cs40l26->dev, &dev_attr_override_magnitude);
+	device_create_file(cs40l26->dev, &dev_attr_override_period);
+    device_create_file(cs40l26->dev, &dev_attr_override_length);
+    device_create_file(cs40l26->dev, &dev_attr_override_repeat);
 
 	return 0;
 err:
@@ -6079,6 +6394,11 @@ int cs40l26_remove(struct cs40l26_private *cs40l26)
 	int error;
 
 	dev_err(cs40l26->dev, "%s\n", __func__);
+	device_remove_file(cs40l26->dev, &dev_attr_override_effect_id);
+	device_remove_file(cs40l26->dev, &dev_attr_override_magnitude);
+	device_remove_file(cs40l26->dev, &dev_attr_override_period);
+    device_remove_file(cs40l26->dev, &dev_attr_override_length);
+    device_remove_file(cs40l26->dev, &dev_attr_override_repeat);
 	cancel_delayed_work_sync(&cs40l26->probe_work);
 	cs40l26_irq_enable(cs40l26, CS40L26_IRQ_DISABLE);
 	mutex_destroy(&cs40l26->lock);
