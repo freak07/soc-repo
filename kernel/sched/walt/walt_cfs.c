@@ -1178,7 +1178,7 @@ fail:
 
 static void
 walt_select_task_rq_fair(void *unused, struct task_struct *p, int prev_cpu,
-				int sd_flag, int select_flags, int *target_cpu)
+				int sd_flag, int wake_flags, int *target_cpu)
 {
 	int sync;
 	int sibling_count_hint;
@@ -1190,7 +1190,7 @@ walt_select_task_rq_fair(void *unused, struct task_struct *p, int prev_cpu,
 		return;
 
 	get_entry_instr(SELECT_TASK_RQ_FAIR);
-	sync = (select_flags & WF_SYNC) && !(current->flags & PF_EXITING);
+	sync = (wake_flags & WF_SYNC) && !(current->flags & PF_EXITING);
 	sibling_count_hint = p->wake_q_count;
 	p->wake_q_count = 0;
 
