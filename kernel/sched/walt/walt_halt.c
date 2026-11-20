@@ -85,6 +85,7 @@ static void migrate_tasks(struct rq *dead_rq, struct rq_flags *rf)
 	struct task_struct *next, *stop = rq->stop;
 	LIST_HEAD(percpu_kthreads);
 	unsigned int num_pinned_kthreads = 1;
+	unsigned int pick_retries = 0;
 	struct rq_flags orf = *rf;
 	int dest_cpu;
 
@@ -119,7 +120,24 @@ static void migrate_tasks(struct rq *dead_rq, struct rq_flags *rf)
 		if (rq->nr_running == 1)
 			break;
 
-		next = pick_task(rq);
+		next = pick_task(rq, NULL);
+
+		/*
+		 * pick_task() does not contain the retry loop. Since newidle
+		 * balance moved into pick_task_fair() it returns RETRY_TASK
+		 * when the fair class turned out to be empty while something
+		 * else is still accounted on the rq, which is always the case
+		 * here because we are the running stop task. RETRY_TASK is
+		 * (void *)-1 and must not be dereferenced: go round again so
+		 * nr_running is re-checked, and give up after a few attempts
+		 * the way the old "picked the idle task" case did.
+		 */
+		if (unlikely(next == RETRY_TASK)) {
+			if (++pick_retries > 3)
+				break;
+			continue;
+		}
+		pick_retries = 0;
 
 		if (walt_is_idle_task(next))
 			break;
