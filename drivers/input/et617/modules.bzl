@@ -8,4 +8,8 @@ def register_modules(registry):
             "drivers/input/et617/etxxx_fp.h",
             "drivers/input/et617/etxxx_fp.c",
         ],
+	deps = [
+            # do not sort
+            "drivers/input/misc/pm8941-pwrkey",
+        ],
     )

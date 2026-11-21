@@ -208,6 +208,7 @@ struct egisfp_dev_t
 	struct pinctrl_state *irq_low;
 	struct pinctrl_state *vdd_high;
 	struct pinctrl_state *vdd_low;
+	bool require_btn_press;
 };
 
 int egisfp_platforminit(struct egisfp_dev_t *egis_dev);

@@ -156,6 +156,24 @@ void egisfp_interrupt_enable(struct egisfp_dev_t *egis_dev, int enable_mode)
 	spin_unlock_irqrestore(&egis_dev->irq_lock, irqflags);
 }
 
+//extern void (*egisfp_power_btn_callback)(void);
+
+extern void register_egisfp_power_btn_callback(void (*cb)(void));
+extern void unregister_egisfp_power_btn_callback(void);
+
+typedef void (*register_cb_t)(void (*)(void));
+typedef void (*unregister_cb_t)(void);
+
+static unsigned long egis_last_power_press = 0;
+
+void egisfp_notify_power_btn(void)
+{
+    egis_last_power_press = jiffies;
+    if (g_data && g_data->require_btn_press) {
+        egisfp_interrupt_enable(g_data, 1);
+    }
+}
+
 static DECLARE_WAIT_QUEUE_HEAD(interrupt_waitq);
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 0)
@@ -201,9 +219,44 @@ void egisfp_interrupt_timer_call(unsigned long _data)
 	wake_up_interruptible(&interrupt_waitq);
 }
 #endif
+
+static ssize_t require_btn_press_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+    struct egisfp_dev_t *egis_dev = dev_get_drvdata(dev);
+    if (!egis_dev)
+        return -ENODEV;
+    return snprintf(buf, PAGE_SIZE, "%d\n", egis_dev->require_btn_press);
+}
+
+static ssize_t require_btn_press_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
+{
+    struct egisfp_dev_t *egis_dev = dev_get_drvdata(dev);
+    int val;
+    
+    if (!egis_dev)
+        return -ENODEV;
+        
+    if (kstrtoint(buf, 10, &val) == 0) {
+        egis_dev->require_btn_press = !!val;
+        INFO_PRINT(" %s : require_btn_press set to %d\n", __func__, egis_dev->require_btn_press);
+    }
+    return count;
+}
+static DEVICE_ATTR_RW(require_btn_press);
+
 irqreturn_t fp_eint_func(int irq, void *dev_id)
 {
 	struct egisfp_dev_t *egis_dev = dev_id;
+
+	if (egis_dev->require_btn_press) {
+        if (time_after(jiffies, egis_last_power_press + msecs_to_jiffies(1500))) {
+            INFO_PRINT(" %s : Ignoring touch, disabling IRQ.\n", __func__);
+            /* Disable the hardware interrupt until the power button is pressed */
+            egisfp_interrupt_enable(egis_dev, 0);
+            return IRQ_HANDLED;
+        }
+    }
+
 	if (!egis_dev->fps_ints.int_count)
 		mod_timer(&egis_dev->fps_ints.timer, jiffies + msecs_to_jiffies(egis_dev->fps_ints.detect_period));
 	egis_dev->fps_ints.int_count++;
@@ -216,6 +269,16 @@ irqreturn_t fp_eint_func_ll(int irq, void *dev_id)
 {
 	struct egisfp_dev_t *egis_dev = dev_id;
 	INFO_PRINT(" %s \n", __func__);
+
+	if (egis_dev->require_btn_press) {
+        if (time_after(jiffies, egis_last_power_press + msecs_to_jiffies(1500))) {
+            INFO_PRINT(" %s : Ignoring touch, disabling IRQ to prevent storm.\n", __func__);
+            /* Disable the hardware interrupt until the power button is pressed */
+            egisfp_interrupt_enable(egis_dev, 0);
+            return IRQ_RETVAL(IRQ_HANDLED);
+        }
+    }
+
 	egis_dev->fps_ints.finger_on = 1;
 	egisfp_interrupt_enable(egis_dev, 0);
 	wake_up_interruptible(&interrupt_waitq);
@@ -1304,6 +1367,17 @@ void egisfp_remove(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct egisfp_dev_t *egis_dev = dev_get_drvdata(dev);
 	INFO_PRINT(" %s : driver remove \n", __func__);
+	device_remove_file(dev, &dev_attr_require_btn_press);
+	unregister_cb_t unreg_func;
+
+	//egisfp_power_btn_callback = NULL;
+
+	unreg_func = (unregister_cb_t)symbol_get(unregister_egisfp_power_btn_callback);
+	    if (unreg_func) {
+		unreg_func();
+		symbol_put(unregister_egisfp_power_btn_callback);
+	    }
+
 	if (egis_dev->request_irq_done)
 	{
 		free_irq(egis_dev->gpio_irq, egis_dev);
@@ -1335,8 +1409,16 @@ int egisfp_probe(struct platform_device *pdev)
 	struct egisfp_dev_t *egis_dev;
 	int status, i;
 	unsigned long minor;
+	register_cb_t reg_func;
 
 	INFO_PRINT(" %s : driver init \n", __func__);
+
+	reg_func = (register_cb_t)symbol_get(register_egisfp_power_btn_callback);
+	    if (!reg_func) {
+		dev_info(&pdev->dev, "pm8941-pwrkey not ready, deferring probe\n");
+		return -EPROBE_DEFER;
+	    }
+
 	BUILD_BUG_ON(N_SPI_MINORS > 256);
 	status = register_chrdev(EGIS_FP_MAJOR, EGIS_CHRD_DRIVER_NAME, &egisfp_fops);
 	if (status < 0)
@@ -1441,6 +1523,14 @@ int egisfp_probe(struct platform_device *pdev)
 	g_data = egis_dev;
 //    get_hardware_info_data(HWID_FINGERPRINT,"egistec:EC617");
 
+	egis_dev->require_btn_press = 0;
+	    if (device_create_file(&pdev->dev, &dev_attr_require_btn_press)) {
+		ERROR_PRINT(" %s : failed to create sysfs node\n", __func__);
+	    }
+
+	reg_func(egisfp_notify_power_btn);
+	symbol_put(register_egisfp_power_btn_callback);
+
 	DEBUG_PRINT(" %s : initialize success %d\n", __func__, status);
 
 	return status;
@@ -1452,6 +1542,7 @@ egistec_probe_failed:
 	device_destroy(egisfp_class, egis_dev->devt);
 	class_destroy(egisfp_class);
 	kfree(egis_dev);
+	symbol_put(register_egisfp_power_btn_callback);
 	ERROR_PRINT(" %s : driver probe failed %d \n", __func__, status);
 	return status;
 }
@@ -1478,5 +1569,6 @@ void __exit egisfp_exit(void)
 module_init(egisfp_init);
 module_exit(egisfp_exit);
 
+MODULE_SOFTDEP("pre: pm8941_pwrkey");
 MODULE_DESCRIPTION("egis fingerprint driver");
 MODULE_LICENSE("GPL");
