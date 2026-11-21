@@ -20,6 +20,25 @@
 #include <linux/regmap.h>
 #include <linux/suspend.h>
 
+static void (*power_btn_cb)(void) = NULL;
+static DEFINE_SPINLOCK(power_btn_cb_lock);
+
+void register_egisfp_power_btn_callback(void (*cb)(void))
+{
+    spin_lock(&power_btn_cb_lock);
+    power_btn_cb = cb;
+    spin_unlock(&power_btn_cb_lock);
+}
+EXPORT_SYMBOL_GPL(register_egisfp_power_btn_callback);
+
+void unregister_egisfp_power_btn_callback(void)
+{
+    spin_lock(&power_btn_cb_lock);
+    power_btn_cb = NULL;
+    spin_unlock(&power_btn_cb_lock);
+}
+EXPORT_SYMBOL_GPL(unregister_egisfp_power_btn_callback);
+
 #define PON_REV2			0x01
 
 #define PON_SUBTYPE			0x05
@@ -183,6 +202,13 @@ static irqreturn_t pm8941_pwrkey_irq(int irq, void *_data)
 		input_sync(pwrkey->input);
 	}
 	pwrkey->last_status = sts;
+
+	if (sts && pwrkey->code == KEY_POWER) {
+        spin_lock(&power_btn_cb_lock);
+        if (power_btn_cb)
+            power_btn_cb();
+        spin_unlock(&power_btn_cb_lock);
+    	}
 
 	input_report_key(pwrkey->input, pwrkey->code, sts);
 	input_sync(pwrkey->input);
