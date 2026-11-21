@@ -28,6 +28,7 @@ struct qmi_sensor {
 	struct device			*dev;
 	char				qmi_name[QMI_CLIENT_NAME_LENGTH];
 	bool                            connection_active;
+	int                 fault_count;
 	struct list_head		ts_node;
 	struct thermal_zone_device	*tz_dev;
 	int32_t				last_reading;
@@ -229,13 +230,27 @@ static int qmi_ts_request(struct qmi_sensor *qmi_sens,
 
 static int qmi_sensor_read(struct thermal_zone_device *tz, int *temp)
 {
-	struct qmi_sensor *qmi_sens = (struct qmi_sensor *)tz->devdata;
+    struct qmi_sensor *qmi_sens = (struct qmi_sensor *)tz->devdata;
+    int ret;
 
-	if (qmi_sens->connection_active && !atomic_read(&in_suspend))
-		qmi_ts_request(qmi_sens, true);
-	*temp = qmi_sens->last_reading;
+    if (qmi_sens->connection_active && !atomic_read(&in_suspend)) {
+        ret = qmi_ts_request(qmi_sens, true);
+        if (ret < 0) {
+            qmi_sens->fault_count++;
+            if (qmi_sens->fault_count > 3) {
+                pr_err("Sensor:%s timed out too many times, disabling polling\n",
+                        qmi_sens->qmi_name);
+                qmi_sens->connection_active = false;
+            }
+        } else {
+            /* Reset on successful read */
+            qmi_sens->fault_count = 0;
+        }
+    }
 
-	return 0;
+    *temp = qmi_sens->last_reading;
+
+    return 0;
 }
 
 static int qmi_sensor_set_trips(struct thermal_zone_device *tz, int low, int high)
@@ -365,6 +380,7 @@ static int verify_sensor_and_register(struct qmi_ts_instance *ts)
 					continue;
 
 				qmi_sens->connection_active = true;
+				qmi_sens->fault_count = 0;
 				/*
 				 * Send a temperature request notification.
 				 */
