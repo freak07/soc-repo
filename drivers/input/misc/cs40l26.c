@@ -3423,10 +3423,10 @@ static int cs40l26_upload_effect(struct input_dev *dev,
                 0x00, 0xFF, 0x0d, 0x00, 0x00, 0x00, 0x00, 0x00
             };
             u8 *payload;
-            int old_len = effect->u.periodic.custom_len;
+            //int old_len = effect->u.periodic.custom_len;
 
-            dev_info(cs40l26->dev, "HACK: Intercepted Effect %d. Old length: %d words\n",
-                     effect->id, old_len);
+            //dev_info(cs40l26->dev, "HACK: Intercepted Effect %d. Old length: %d words\n",
+            //         effect->id, old_len);
 
             // Free Android's weak pointer
             kfree(work_data.raw_custom_data);
@@ -3444,15 +3444,15 @@ static int cs40l26_upload_effect(struct input_dev *dev,
             payload[13] = cs40l26->override_magnitude; // Amplitude 2 (Index 13)
             payload[11] = (u8)cs40l26->override_repeat;
 
-            dev_info(cs40l26->dev, "HACK: New length: %d words. Injected Magnitude: %d\n",
-                     effect->u.periodic.custom_len, cs40l26->override_magnitude);
+            //dev_info(cs40l26->dev, "HACK: New length: %d words. Injected Magnitude: %d\n",
+            //         effect->u.periodic.custom_len, cs40l26->override_magnitude);
 
-            print_hex_dump(KERN_INFO, "HACK MONOLITHIC PAYLOAD: ", DUMP_PREFIX_OFFSET, 16, 1,
-                           work_data.raw_custom_data, sizeof(fp_payload), false);
+            //print_hex_dump(KERN_INFO, "HACK MONOLITHIC PAYLOAD: ", DUMP_PREFIX_OFFSET, 16, 1,
+            //               work_data.raw_custom_data, sizeof(fp_payload), false);
         }
-		dev_info(cs40l26->dev, "DUMPING EFFECT ID %d (Length: %d)\n", effect->id, len);
-        print_hex_dump(KERN_INFO, "OWT PAYLOAD: ", DUMP_PREFIX_OFFSET, 16, 1,
-                       work_data.raw_custom_data, len * sizeof(s16), false);
+	//	dev_info(cs40l26->dev, "DUMPING EFFECT ID %d (Length: %d)\n", effect->id, len);
+        //print_hex_dump(KERN_INFO, "OWT PAYLOAD: ", DUMP_PREFIX_OFFSET, 16, 1,
+        //               work_data.raw_custom_data, len * sizeof(s16), false);
 	}
 
 	work_data.cs40l26 = cs40l26;
@@ -6451,7 +6451,7 @@ EXPORT_SYMBOL_GPL(pseq_params);
 
 inline int cs40l26_pm_enter(struct device *dev)
 {
-	dev_dbg(dev, "%s\n", __func__);
+	//dev_dbg(dev, "%s\n", __func__);
 
 	return pm_runtime_resume_and_get(dev);
 }
@@ -6459,7 +6459,7 @@ EXPORT_SYMBOL_GPL(cs40l26_pm_enter);
 
 inline void cs40l26_pm_exit(struct device *dev)
 {
-	dev_dbg(dev, "%s\n", __func__);
+	//dev_dbg(dev, "%s\n", __func__);
 
 	pm_runtime_mark_last_busy(dev);
 	pm_runtime_put_autosuspend(dev);
