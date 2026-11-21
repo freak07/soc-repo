@@ -267,6 +267,22 @@ cleanup:
 
 /*******************************sysfs start************************************/
 static ssize_t set_cpu_min_freq(struct kobject *kobj,
+    struct kobj_attribute *attr, const char *buf, size_t count)
+{
+    /* Keep the debug log so you can still watch the HAL trying to boost */
+    //pr_err("MSM_PERF_DEBUG: [DUMMY] [%s] (PID: %d) tried to set_cpu_min_freq: %.*s",
+    //       current->comm, current->tgid, (int)count, buf);
+
+    /*
+     * Return 'count' immediately.
+     * The HAL thinks the write succeeded, but PM QoS is never updated.
+     * WALT will now rely 100% on actual CPU load to scale frequencies.
+     */
+    return count;
+}
+
+#if 0
+static ssize_t set_cpu_min_freq(struct kobject *kobj,
 	struct kobj_attribute *attr, const char *buf, size_t count)
 {
 	int i, ntokens = 0;
@@ -275,6 +291,9 @@ static ssize_t set_cpu_min_freq(struct kobject *kobj,
 	struct cpu_status *i_cpu_stats;
 	struct freq_qos_request *req;
 	int ret = 0;
+
+	//pr_err("MSM_PERF_DEBUG: [%s] (PID: %d) set_cpu_min_freq: %.*s",
+        //   current->comm, current->tgid, (int)count, buf);
 
 	mutex_lock(&freq_pmqos_lock);
 	if (!ready_for_freq_updates) {
@@ -335,6 +354,7 @@ static ssize_t set_cpu_min_freq(struct kobject *kobj,
 
 	return count;
 }
+#endif
 
 static ssize_t get_cpu_min_freq(struct kobject *kobj,
 	struct kobj_attribute *attr, char *buf)
