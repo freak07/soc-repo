@@ -127,6 +127,8 @@ static void __used lx82907a_setup(struct lxs_ts *ts)
 	ts->t_frame_rate_np = TS_TOUCH_FRAME_120HZ;
 	ts->t_frame_rate_lp = TS_TOUCH_FRAME_L120HZ;
 
+	ts->t_frame_rate_force_max = 2;
+
 	__d_frame_tbl_np = __d_frame_set_np;
 	__d_frame_tbl_lp = __d_frame_set_lp;
 	__t_frame_tbl_np = __t_frame_set_np;
@@ -191,6 +193,21 @@ static int lx82907a_touch_frame_rate(struct lxs_ts *ts, int mode)
 
 	if (lxs_addr_is_invalid(reg->t_frame_rate))
 		return 0;
+
+	/*
+	 * kernel override
+	 * 1 : NP 240Hz/240Hz, 2 : NP 240Hz/120Hz (Active/Doze), LP always L120Hz
+	 */
+	if (ts->t_frame_rate_force_max) {
+		int __value = (!is_u3) ? TS_TOUCH_FRAME_L120HZ :
+			(ts->t_frame_rate_force_max == 2) ? TS_TOUCH_FRAME_240HZ_H :
+							    TS_TOUCH_FRAME_240HZ;
+
+		if (value != __value)
+			t_dev_info(ts->dev, "%s: force_max overrides %d -> %d\n",
+				__func__, value, __value);
+		value = __value;
+	}
 
 	if (touch_lookup_frame_tbl(t_frame_tbl, value) < 0)
 		return 0;
@@ -392,6 +409,60 @@ static TS_ATTR(frame_rate_##_name, show_frame_rate_##_name, store_frame_rate_##_
 
 TS_ATTR_FRAME_RATE(np, LCD_MODE_U3);
 TS_ATTR_FRAME_RATE(lp, LCD_MODE_U0);
+
+/*
+ * Force highest touch sampling rate
+ * echo 0 > touch_rate_force_max : off, follow userspace (frame_rate_np/lp)
+ * echo 1 > touch_rate_force_max : NP 240Hz/240Hz (Active/Doze), LP L120Hz
+ * echo 2 > touch_rate_force_max : NP 240Hz/120Hz (Active/Doze), LP L120Hz
+ */
+static ssize_t show_touch_rate_force_max(struct device *dev, char *buf)
+{
+	struct lxs_ts *ts = dev_get_drvdata(dev);
+
+	return lxs_snprintf(buf, 0, "%d\n", ts->t_frame_rate_force_max);
+}
+
+static ssize_t store_touch_rate_force_max(struct device *dev,
+				const char *buf, size_t count)
+{
+	struct lxs_ts *ts = dev_get_drvdata(dev);
+	struct lxs_ts_chip *chip = &ts->chip;
+	int value;
+
+	if (kstrtoint(buf, 10, &value))
+		return count;
+
+	if ((value < 0) || (value > 2)) {
+		t_dev_err(dev, "%s: invalid %d (0: off, 1: 240/240, 2: 240/120)\n",
+			__func__, value);
+		return count;
+	}
+
+	mutex_lock(&ts->lock);
+
+	if (ts->t_frame_rate_force_max == value)
+		goto out;
+
+	ts->t_frame_rate_force_max = value;
+
+	t_dev_info(dev, "%s: %d\n", __func__, value);
+
+	/* apply immediately if the IC is up and running */
+	if ((ts->state_core == TS_CORE_NORMAL) && ts->probe_done &&
+		(ts->state_mode == TS_MODE_RESUME) &&
+		(atomic_read(&chip->init) == TC_IC_INIT_DONE))
+		lxs_hal_tc_driving(ts, -1);
+	else
+		t_dev_info(dev, "%s: applied on next tc_driving\n", __func__);
+
+out:
+	mutex_unlock(&ts->lock);
+
+	return count;
+}
+static TS_ATTR(touch_rate_force_max, show_touch_rate_force_max, store_touch_rate_force_max);
+
 #endif	/* __LXS_SUPPORT_DISP_FRAME_RATE */
 
 #if defined(__LXS_SUPPORT_LPWG)
@@ -830,6 +901,7 @@ static struct attribute *lxs_ts_attr_add[] = {
 	&ts_attr_frame_table.attr,
 	&ts_attr_frame_rate_np.attr,
 	&ts_attr_frame_rate_lp.attr,
+	&ts_attr_touch_rate_force_max.attr,
 #endif	/* __LXS_SUPPORT_DISP_FRAME_RATE */
 #if defined(__LXS_SUPPORT_LPWG)
 	&ts_attr_set_lowpower_mode.attr,

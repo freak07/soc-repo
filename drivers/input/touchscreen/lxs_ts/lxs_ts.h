@@ -1689,6 +1689,8 @@ struct lxs_ts {
 	int t_frame_rate_np;
 	int t_frame_rate_lp;
 
+	int t_frame_rate_force_max;
+
 	int suspend_is_on_going;
 
 	int hw_reset_delay;
