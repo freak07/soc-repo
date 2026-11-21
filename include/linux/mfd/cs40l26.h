@@ -1357,6 +1357,11 @@ struct cs40l26_private {
 	bool disable_asp_preempt;
 	bool ls_cal_f0_closed_loop;
 	u32 reg_addr;
+	int override_effect_id;
+	int override_magnitude;
+	int override_period;
+    int override_length;
+    int override_repeat;
 };
 
 struct cs40l26_codec {
